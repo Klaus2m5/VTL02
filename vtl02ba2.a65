@@ -1,23 +1,11 @@
 ;234567890123456789012345678901234567890123456789012345
 ;
-; In the Kowalski 6502 simulator some of the options
+; In the Kingswood AS65 assembler some of the options
 ; below must be set manually.
 ;
-;    .lf  vtl02ba2.lst  (set listfile in menu:
-;                        Simulator->Options->Assembler)
-;    .cr  6502
-    .opt  Proc6502
-;
-; to run with I/O set terminal active:
-;    Menu                     or   Key
-;    Simulator->Options->Simulator [Ctrl-E]
-;    Simulator->Assemble           [F7]
-;    Simulator->Debugger           [F6]
-;    Simulator->Run                [F5]
-;    View->Input/output            [Alt-5]
-;
-;    .tf  vtl02ba2.obj,ap1  (optional save output to
-;                             file: File->Save Code)
+;    .lf  vtl02ba2.lst      (set -l in commandline)
+;    .cr  6502              (is default)
+;    .tf  vtl02ba2.obj,ap1  (set -s2 in commandline)
 ;-----------------------------------------------------;
 ;             VTL-2 for the 6502 (VTL02B)             ;
 ;           Original Altair 680b version by           ;
@@ -216,30 +204,31 @@ nulstk   = $01ff    ; system stack resides in page 1
 ;KEYIN    = $fd0c    ; apple monitor keyin routine
 ;COUT     = $fded    ; apple monitor charout routine
 ;-----------------------------------------------------;
-; Equates for the Kowalski 6502 simulator
+; Equates for the 2m5 SBC emulator
 ESC      = 27       ; "Cancel current input line" key
 BS       = 8        ; "Delete last keypress" key
 OP_OR    = '|'      ; Bit-wise OR operator
 linbuf   = $0200    ; input line buffer
 prgm     = $0400    ; VTL02B program grows from here
-himem    = $F000    ;   ... up to the top of user RAM
-vtl02b   = $FC00    ; interpreter cold entry point
+himem    = $7b00    ;   ... up to the top of user RAM
+vtl02b   = $fb00    ; interpreter cold entry point
 ;                     (warm entry point is startok)
-io_area  = $f000      ;configure simulator terminal I/O
-acia_tx  = io_area+1  ;acia tx data register
-acia_rx  = io_area+4  ;acia rx data register
+io_area  = $bf00      ;configure emulator terminal I/O
+acia_tx  = io_area+$f0  ;acia tx data register
+acia_rx  = io_area+$f0  ;acia rx data register
+acia_st  = io_area+$ff  ;bit 0 = 10ms tick
 ;=====================================================;
-    .org vtl02b
+    org  vtl02b
 ;-----------------------------------------------------;
 ; Initialize program area pointers and start VTL02B
 ; 17 bytes
-    lda  #<prgm
+    lda  #lo(prgm)
     sta  ampr       ; {&} -> empty program
-    lda  #>prgm
+    lda  #hi(prgm)
     sta  ampr+1
-    lda  #<himem
+    lda  #lo(himem)
     sta  star       ; {*} -> top of user RAM
-    lda  #>himem
+    lda  #hi(himem)
     sta  star+1
 startok:
     sec             ; request "OK" message
@@ -248,7 +237,7 @@ startok:
 ; 29 bytes + 3 bytes patch: restore VTL02a behavior
 start:
     cld
-    ldx  #<nulstk
+    ldx  #lo(nulstk)
     txs             ; reset the system stack pointer
     bcc  user       ; skip "OK" if carry clear
     jsr  outnl
@@ -473,9 +462,10 @@ prmsg:
 prmsg2:
     tax             ; save closing delimiter
     jsr  inkey      ; any key = pause?
-    bcc  prout      ;   no: proceed
-    jsr  inch       ;   yes: wait for another key
-prout:
+; patch - remove garbage output when halting print
+;    bcc  prout      ;   no: proceed
+;    jsr  inch       ;   yes: wait for another key
+;prout:
     txa             ; retrieve closing delimiter
     beq  outnl      ; always \n after null delimiter
     jsr  skpbyte    ; skip over the delimiter
@@ -539,13 +529,13 @@ exec3:
     ldy  #0
     sta  (arg),y
     adc  tick+1     ; store arg[{1}] in the left-side
-    rol             ;   variable
+    rol  a          ;   variable
     tax
     iny
     lda  arg+3
     sta  (arg),y
     adc  tick       ; pseudo-randomize {'}
-    rol
+    rol  a
     sta  tick+1
     stx  tick
 execrts:
@@ -826,7 +816,7 @@ oper8:
     clc             ;     (cc) if not 0
 oper8b:
     lda  gthan
-    rol
+    rol  a
 oper8c:
     adc  #0
     and  #1         ; var[x] = 1 (true), 0 (false)
@@ -848,7 +838,7 @@ oper8e:
 convp:
     cmp  #':'       ; array element?
     beq  varray
-    asl             ;   no: var[x] -> simple variable
+    asl  a          ;   no: var[x] -> simple variable
     ora  #$80
     bmi  oper8d     ;     (always taken)
 varray:
@@ -911,9 +901,9 @@ inln6:
 newln:
     jsr  outnl      ;   yes: discard entire line
 inln:
-    ldy  #<linbuf   ; entry point: start a fresh line
+    ldy  #lo(linbuf); entry point: start a fresh line
     sty  at         ; {@} -> input line buffer
-    ldy  #>linbuf
+    ldy  #hi(linbuf)
     sty  at+1
     ldy  #1
 inln5:
@@ -942,9 +932,9 @@ inln3:
 ; 53 bytes
 find:
     bcs  findnxt    ; cs: search begins at next line
-    lda  #>prgm     ; cc: search begins at first line
+    lda  #hi(prgm)  ; cc: search begins at first line
     sta  at+1
-    lda  #<prgm     ; {@} -> first program line
+    lda  #lo(prgm)  ; {@} -> first program line
     bcc  find1st    ; (always taken)
 findnxt:
     jsr  checkat    ; if {@} >= {&} then the search
@@ -1017,33 +1007,68 @@ getbyte:
 ;    sec             ; (by contract with callers)
 ;outrts:
 ;    rts
-;============ Kowalski I/O subroutines ===============;
+;========== 2m5 SBC emulator I/O subroutines ============;
 ;-----------------------------------------------------;
-; Check for user keypress and return with (cc) if none
+; Check for user keypress and return if none
 ;   is pending.  Otherwise, check for ctrl-C and
-;   return with (cs).
-; 7 bytes
+;   return after next keypress.
+;
 inkey:
     lda  acia_rx    ; Is there a character waiting?
-    bne  inch2      ;   yes: check CTRL-C 
-    clc             ;   no: return with (cc)
+    beq  inkeyr     ;   no: return
+    cmp  #3         ; is ctrl-c
+    beq  istart     ;   yes: abort to OK prompt
+inkeyp:
+    lda  acia_rx    ; pause until next key
+    beq  inkeyp
+    cmp  #3         ; is ctrl-c
+    beq  istart     ;   yes: abort to OK prompt
+inkeyr:
     rts
 ; - - - - - - - - - - - - - - - - - - - - - - - - - - ;
 ; Read key from stdin into a, echo, (cs)
 ; Dump stack and abort to "OK" prompt if ctrl-C
-; 16 bytes
+;
 inch:
     lda  acia_rx    ; get character from rx register
     beq  inch       ; wait for character !=0
-    cmp  #10        ; remove line feed to allow paste
-    beq  inch       ; in the Kowalski I/O window
+    sty  dolr       ; save y reg
+    cmp  #127       ; convert delete to backspace
+    bne  conv_bs2del
+    lda  #8
+conv_bs2del:
+    cmp  #27        ; escape?
+    bne  skip_esc_no
+    ldy  #5         ; timer loop - 5*10ms
+skip_esc_next:
+    lda  #1         ; ack last tick
+    sta  acia_st
+skip_esc_wait:  
+    lda  acia_st
+    and  #1         ; next tick
+    beq  skip_esc_wait
+    dey
+    bne  skip_esc_next
+skip_esc_discard:  
+    iny             ; any data = y > 1
+    lda  acia_rx
+    bne  skip_esc_discard
+    cpy  #1
+    bne  inch
+skip_esc_esc:       ; escape only - send to vtl  
+    lda  #27
+    rts
+skip_esc_no
+    ldy  dolr       ; restore y reg
 inch2:
+    and  #$7f       ; ensure char is positive ascii
     cmp  #$03       ; ctrl-C?
     bne  outch      ;   no: echo to terminal
+istart:
     jmp  start      ;   yes: abort to "OK" prompt
 ; - - - - - - - - - - - - - - - - - - - - - - - - - - ;
 ; Print ascii char in a to stdout, (cs)
-; 16 bytes
+;
 outch:
     cmp  #13        ; add line feed to carriage return
     bne  skip_cr
@@ -1051,8 +1076,17 @@ outch:
     sta  acia_tx
     lda  #13
 skip_cr:
+    cmp  #8         ; backspace?
+    bne  skip_bs
+    sta  acia_tx    ; make erasing backspace
+    lda  #' '
+    sta  acia_tx
+    lda  #8
+skip_bs:
     sta  acia_tx    ; emit char via transmit register
     sec             ; (by contract with callers)
     rts
 ;-----------------------------------------------------;
-    .end vtl02b     ; set start address
+    org  $fffc
+    dw   vtl02b     ; reset vector -> cold start
+    end  vtl02b     ; set start address

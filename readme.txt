@@ -16,9 +16,11 @@
  The files:
    VTL02B for the apple II & the sbprojects.com assembler:
       vtl02ba2.asm
-   VTL02B for the Kowalski 6502 simulator 
+   VTL02B for the Kowalski 6502 simulator: 
    http://www.exifpro.com/downloads/6502_1.2.12.zip:
-      vtl02b_for_Kowalski.asm
+      vtl02ba2.65s
+   VTL02B for my emulator & the Kingswood AS65 assembler:
+      vtl02ba2.a65
  
  New features in Revision B:
  * Bit-wise operators & | ^ (and, or, xor)
