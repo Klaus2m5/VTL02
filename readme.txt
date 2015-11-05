@@ -20,8 +20,12 @@
         vtl02ca2.65s
      VTL02C for my emulator & the Kingswood AS65 assembler
         vtl02ca2.a65
- 
- 2015: Revision B included some space optimizations
+     VTL02C codename "Speedy Gonzales"
+        vtl02sg.a65     
+        this is a work in progress version and is my attempt
+        to trade performance versus codesize
+
+  2015: Revision B included some space optimizations
          (suggested by dclxvi) and enhancements
          (suggested by mkl0815 and Klaus2m5):
 
