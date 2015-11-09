@@ -182,6 +182,9 @@
 ;     find: is now only used for true branches.
 ;   added statement delimiter allowing multi statement
 ;     lines. branch to same line is now allowed.
+;   added decimal to binary conversion on line entry.
+;   abbreviated getting a simple variable in getval:.
+;   bypassed setting a simple variable in exec:.
 ;    
 ;-----------------------------------------------------;
 ; VTL02C variables occupy RAM addresses $0080 to $00ff,
@@ -200,10 +203,10 @@ at       = $80      ; {@}* internal pointer / mem byte
 ; VTL02C standard user variable space
 ;                     {A B C .. X Y Z [ \ ] ^ _}
 ; VTL02C system variable space
-space    = $c0      ; { }  Starting with VTL02B:  the
-;                       space character is no longer a
-;                       valid user variable nor a
-;                       "valid" binary operator.
+space    = $c0      ; { }* temp / Starting with VTL02B:
+;                       the space character is no
+;                       longer a valid user variable
+;                       nor a "valid" binary operator.
 ;                       It is now only significant as a
 ;                       numeric constant terminator and
 ;                       as a place-holder in strings
@@ -255,14 +258,15 @@ OP_OR    = '|'      ; Bit-wise OR operator
 timr_var = '/'      ; 10 ms count up variable
 linbuf   = $0200    ; input line buffer
 prgm     = $0400    ; VTL02C program grows from here
-himem    = $7a00    ;   ... up to the top of user RAM
-vtl02c   = $fa00    ; interpreter cold entry point
+himem    = $7900    ;   ... up to the top of user RAM
+vtl02c   = $f900    ; interpreter cold entry point
 ;                     (warm entry point is startok)
 io_area  = $bf00    ;configure emulator terminal I/O
 acia_tx  = io_area+$f0  ;acia tx data register
 acia_rx  = io_area+$f0  ;acia rx data register
 timr_ie  = io_area+$fe  ;timer interrupt enable bit 0
 timr_fl  = io_area+$ff  ;timer flags, bit 0 = 10ms tick
+diag     = io_area+$fc  ;diag reg, bit 7 = exit to mon
 ;=====================================================;
     org  vtl02c
 ;-----------------------------------------------------;
@@ -298,6 +302,8 @@ user:
     sta  lparen+1
     jsr  inln       ; input a line from the user
     ldx  #pound     ; cvbin destination = {#}
+    jsr  cvbin      ; skip line number if exists
+    jsr  d2b        ; convert numbers in line to binary
     jsr  cvbin      ; does line start with a number?
     beq  direct     ;   no: execute direct statement
 ; - - - - - - - - - - - - - - - - - - - - - - - - - - ;
@@ -555,11 +561,44 @@ prstr:
 ;         (ctrl-C) drop the stack & restart "OK" prompt
 ;
 prmsg:
+    lda  #0
+    sta  arg
+    sta  arg+1
     txa
     cmp  (at),y     ; found delimiter or null?
     beq  prmsg2     ; yes: finish up
     lda  (at),y
     beq  prmsg2
+; insert to decode packed constant
+    bpl  prmsg1
+    iny             ; is binary constant
+    cmp  #$fd
+    bcs  prmsg3
+    and  #$7f       ; is single byte
+    sta  arg
+    jmp  prmsg4
+prmsg3:             ; is word
+    lsr  a          ; $00 bytes low->N, high->C
+    ror  a
+    bpl  prmsg5     ; skip low byte
+    lda  (at),y
+    sta  arg
+    iny
+prmsg5:
+    bcc  prmsg4     ; skip high byte
+    lda  (at),y
+    sta  arg+1
+    iny
+prmsg4:
+    txa
+    pha
+    ldx  #arg       ; print constant
+    jsr  prnum
+    pla
+    tax
+    bpl  prmsg
+; end decode constant
+prmsg1:
     jsr  outch      ; no: print char to terminal
     iny             ;   and loop (with safety escape)
     bpl  prmsg
@@ -614,49 +653,25 @@ exec:
     iny
     cmp  #' '       ; is space?
     beq  exec       ; end inline
-    ldx  #arg       ; initialize argument pointer
-    jsr  convp      ; arg[{0}] -> left-side variable
-;    jsr  getbyte    ; skip over assignment operator
-;    jsr  skpbyte    ; is right-side a literal string?
-exec_gb3:           ; inline getbyte + skpbyte
-    lda  (at),y
+    cmp  #'A'       ; variables < {A} ?
+    bcc  exec_byp
+; simple variable
+    asl  a          ; form simple variable address
+    ora  #$80       ; mapping function is (a*2)|128
+    sta  arg
+    lda  #0
+    sta  arg+1
+exec_byp1:
+    lda  (at),y     ; '=' is next
     iny             ; skip space +1
     cmp  #' '       ; is space?
-    beq  exec_gb3
-;    cmp  #'='       ; not '=' implies assigning
-;    beq  exec_gb4   ; variable as target & 1st source
-;    ldy  dolr+1     ; back up to arg[{1}] = arg[{0}]
-;    lda  (at),y
-;    bne  exec_gb5
-exec_gb4:
-    lda  (at),y
-    cmp  #' '       ; is space?
-    bne  exec_gb5
-    iny             ; skip over any space char(s)
-    bne  exec_gb4
-exec_gb5:           ; end inline
-
-    cmp  #'"'       ;   yes: print the string with
-    beq  prstr      ;     trailing ';' check & return
-    ldx  #arg+2     ; point eval to arg[{1}]
-    jsr  eval       ; evaluate right-side in arg[{1}]
-    pha      
-    sty  dolr+1     ; save to continue same line
+    beq  exec_byp1
+    ldx  #arg+2
+    jsr  eval
+    pha
+    sty  dolr+1
     lda  arg+2
     ldy  #0
-    ldx  arg+1      ; was left-side an array element?
-    bne  exec3      ;   yes: skip to default actions
-    ldx  arg
-    cpx  #at        ; if {@=...} statement then poke
-    beq  poke       ;   low half of arg[{1}] to ({<})
-    cpx  #dolr      ; if {$=...} statement then print
-    beq  joutch     ;   arg[{1}] as ASCII character
-    cpx  #ques      ; if {?=...} statement then print
-    beq  prnum0     ;   arg[{1}] as unsigned decimal
-    cpx  #gthan     ; if {>=...} statement then call
-    beq  usr        ;   user-defined ml routine
-    cpx  #pound     ; if {#=...} statement then goto
-    beq  goto       ;   arg[{1}] as line number
 exec3:
     sei             ; force timer consistency
     sta  (arg),y
@@ -678,6 +693,54 @@ execend:
     beq  exec       ; continue with next statement
 execrts:
     rts             ; end of line
+; special variables including array
+exec_byp:
+    ldx  #arg       ; initialize argument pointer
+    jsr  convp      ; arg[{0}] -> left-side variable
+;    jsr  getbyte    ; skip over assignment operator
+;    jsr  skpbyte    ; is right-side a literal string?
+exec_gb3:           ; inline getbyte + skpbyte
+    lda  (at),y
+    iny             ; skip space +1
+    cmp  #' '       ; is space?
+    beq  exec_gb3
+;    cmp  #'='       ; not '=' implies assigning
+;    beq  exec_gb4   ; variable as target & 1st source
+;    ldy  dolr+1     ; back up to arg[{1}] = arg[{0}]
+;    lda  (at),y
+;    bne  exec_gb5
+exec_gb4:
+    lda  (at),y
+    cmp  #' '       ; is space?
+    bne  exec_gb5
+    iny             ; skip over any space char(s)
+    bne  exec_gb4
+exec_gb5:           ; end inline
+    cmp  #'"'       ;   yes: print the string with
+    bne  exec2
+    jmp  prstr      ;     trailing ';' check & return
+exec2:
+    ldx  #arg+2     ; point eval to arg[{1}]
+    jsr  eval       ; evaluate right-side in arg[{1}]
+    pha      
+    sty  dolr+1     ; save to continue same line
+    lda  arg+2
+    ldy  #0
+    ldx  arg+1      ; was left-side an array element?
+    bne  exec3      ;   yes: skip to default actions
+    ldx  arg
+    cpx  #at        ; if {@=...} statement then poke
+    beq  poke       ;   low half of arg[{1}] to ({<})
+    cpx  #dolr      ; if {$=...} statement then print
+    beq  joutch     ;   arg[{1}] as ASCII character
+    cpx  #ques      ; if {?=...} statement then print
+    beq  prnum0     ;   arg[{1}] as unsigned decimal
+    cpx  #gthan     ; if {>=...} statement then call
+    beq  usr        ;   user-defined ml routine
+    cpx  #pound     ; if {#=...} statement then goto
+;    beq  goto       ;   arg[{1}] as line number
+    bne  exec3
+
 goto:
     tax             ; save line # low
     ora  arg+3      ; fall through ?
@@ -805,14 +868,52 @@ evalrts:
 ; Some examples of valid terms:  123, $, H, (15-:J)/?)
 ;
 getval:
-    jsr  cvbin      ; decimal number at @[y]?
-    bne  getrts     ;   yes: return with it in var[x]
-;    jsr  getbyte
-    lda  (at),y     ; inline getbyte
-    iny             ; skip space +1
+;    jsr  cvbin      ; decimal number at @[y]?
+;    lda  #0
+;    sta  0,x        ; var[x] = 0
+;    sta  1,x
+    lda  (at),y     ; get variable or constant
+    bpl  getvar
+    beq  getrts     ; safety exit - end of banana
+    iny
+; get constant
+    cmp  #$fd       ; constant type ?       
+    bcs  getword
+    and  #$7f       ; is single byte
+    sta  0,x
+    lda  #0
+    sta  1,x
+    rts
+getword:            ; is word
+    lsr  a          ; restore null bytes
+    ror  a
+    bpl  clrlow     ; low byte = 0
+    lda  (at),y     ; copy constant low
+    sta  0,x
+    iny
+    bcc  clrhigh    ; high byte = 0
+gethigh:
+    lda  (at),y     ; copy constant low
+    sta  1,x
+    iny
+    rts        
+clrlow:              
+    lda  #0         
+    sta  0,x
+    beq  gethigh
+clrhigh:    
+    lda  #0
+    sta  1,x
+    rts    
+; get variable
+getvar:
+    iny
     cmp  #'@'       ; peek?
-    beq  peek
-    bcs  getv_byp   ; bypass variables > @
+    bcs  getv_byp   ; bypass variables >= @
+    cmp  #' '       ; is space?
+    beq  getval     ; loop on space
+    cmp  #':'       ; array element?
+    beq  getary
     cmp  #'('       ; sub-expression?
     beq  eval       ;   yes: evaluate it recursively
     cmp  #'$'       ; user char input?
@@ -820,11 +921,26 @@ getval:
     cmp  #'?'       ; user line input?
     beq  in_val
 getv_byp:
+    beq  peek
+
+    sty  dolr       ; get simple variable
+    asl  a
+    ora  #$80
+    tay
+    sei             ; force timer consistency
+    lda  0,y
+    sta  0,x  
+    lda  1,y
+    sta  1,x
+    cli             ; force timer consistency end
+    ldy  dolr
+    rts
+    
 ; first set var[x] to the named variable's address,
 ; then replace that address with the variable's actual
 ; value before returning
-    jsr  convp
-    sei             ; force timer consistency
+getary:             ; get array variable
+    jsr  convp_array
     lda  (0,x)
     pha
     inc  0,x
@@ -832,7 +948,6 @@ getv_byp:
     inc  1,x
 getval4:
     lda  (0,x)
-    cli             ; force timer consistency end
     sta  1,x        ; store high-byte of term value
     pla
 getval5:
@@ -846,11 +961,15 @@ peek:               ; memory access?
     lda  (lthan),y  ;     access memory byte at ({<})
     ldy  dolr
     sta  0,x
+    lda  #0
+    sta  1,x
     rts
 
 in_chr:             ; user char input?
     jsr  inch       ; input one char
     sta  0,x
+    lda  #0
+    sta  1,x
     rts
 
 in_val:             ; user line input
@@ -861,6 +980,7 @@ in_val:             ; user line input
     lda  at+1
     pha
     jsr  inln       ; input expression from user
+    jsr  d2b        ; convert numbers in line to binary
     jsr  eval       ; evaluate, var[x] = result
     pla
     sta  at+1
@@ -882,6 +1002,7 @@ in_val:             ; user line input
 convp:
     cmp  #':'       ; array element?
     bne  simple     ;   no: var[x] -> simple variable
+convp_array:
     jsr  eval       ;   yes: evaluate array index at
     asl  0,x        ;     @[y] and advance y
     rol  1,x
@@ -1134,14 +1255,16 @@ cvbin:
 cvb_gb1:            ; inline getbyte
     sty  ques       ; save pointer
     lda  (at),y
-    cmp  #' '       ; is space?
-    bne  cvb_gb2
     iny             ; skip over any space char(s)
-    bne  cvb_gb1    ; end inline
-
+    cmp  #' '       ; is space?
+    beq  cvb_gb1    ; end inline
+cvb_gb2:            ; skip multiply & add for 1st digit
+    eor  #'0'       ; if char at @[y] is not a
+    cmp  #10        ;   decimal digit then stop
+    bcs  cvbin1     ;   the conversion
+    sta  0,x
 cvbin2:
     lda  (at),y     ; grab a char
-cvb_gb2:
     eor  #'0'       ; if char at @[y] is not a
     cmp  #10        ;   decimal digit then stop
     bcs  cvbin3     ;   the conversion
@@ -1177,6 +1300,8 @@ cvb_gb2:
 cvbin4:             ; end inline
     iny             ; loop for more digits
     bpl  cvbin2     ;   (with safety escape)
+cvbin1:
+    dey
 cvbin3:
     cpy  ques       ; (ne) if valid, (eq) if not
     rts
@@ -1194,7 +1319,15 @@ inln6:
     iny             ; line limit exceeded?
     bpl  inln2      ;   no: keep going
 newln:
-    jsr  outnl      ;   yes: discard entire line
+;    jsr  outnl      ;   yes: discard entire line
+    ldy  #0
+inln4:
+    jsr  outcr        
+    lda  erase_line,y
+    beq  inln
+    jsr  outch
+    iny
+    bpl  inln4
 inln:
     ldy  #lo(linbuf); entry point: start a fresh line
     sty  at         ; {@} -> input line buffer
@@ -1216,6 +1349,8 @@ inln3:
     bne  inln6      ; continue if not null
     tay             ; y = 0
     rts
+erase_line:
+    db   ESC,"[K",0
 ;-----------------------------------------------------;
 ; Find the first/next stored program line >= {#}
 ; entry:   (cc): start search at program beginning
@@ -1266,6 +1401,109 @@ find5:
     ldx  lparen+1
 findrts:
     rts
+; - - - - - - - - - - - - - - - - - - - - - - - - - - ;
+; Replaces decimal with binary constants in linbuf
+; to avoid runtime conversion.
+; < 125 = 1 byte $80-$FC ($80 + binary number)
+; > 124 = 3 bytes $FF $0101-$FFFF
+;   if low  byte is $00 then 2 bytes $FE $01-$FF
+;   if high byte is $00 then 2 bytes $FD $01-$FF
+;
+d2b:
+    txa             ; save pointer to arg
+    pha
+    lda  #0         ; statement position counter
+    sta  dolr+1
+d2blp:              ; main loop
+    inc  dolr+1     ; next var, operator or constant
+    ldx  #space     ; cvbin converts to space var
+    jsr  cvbin      ; convert if decimal
+    beq  d2b1       ; if not a constant
+d2b6:
+;    sty  ques+1     ; save to continue later
+    ldx  ques       ; x = y before conversion
+    inc  ques       ; always uses at least 1 byte
+    lda  space+1    ; is < 125 ?
+    bne  d2b2
+    lda  space
+    cmp  #125
+    bcs  d2b2
+    ora  #$80       ; < 125 = 1 byte
+    sta  linbuf,x   ;   ($80 + binary number)
+    bne  d2b3
+d2b2:               ; >= 125 = 2 or 3 bytes
+    inc  ques       ; uses at least 2 bytes
+    lda  #$ff       ; mark word constant
+    sta  ques+1
+    lda  space      ; constant low
+    bne  d2b8
+    dec  ques+1     ; clear bit 0 in marker = $FE
+    lda  space+1    ; store only constant high
+    sta  linbuf+1,x
+    bne  d2b19
+d2b8:    
+    sta  linbuf+1,x ; store constant low
+    lda  space+1    ; constant high
+    bne  d2b9
+    dec  ques+1     ; clear bit 1 in marker = $FD
+    dec  ques+1
+    bne  d2b19      ; and skip store
+d2b9:
+    sta  linbuf+2,x ; store 
+    inc  ques       ; bytes used + 1
+d2b19:
+    lda  ques+1     ; set marker $FD-$FF
+    sta  linbuf,x
+d2b3:
+    cpy  ques       ; empty space ?
+    beq  d2b1       ; no offset
+    ldx  ques
+d2b4:            
+    lda  linbuf,y   ; shrink the line
+    sta  linbuf,x
+    beq  d2b7       ; exit on line end
+    inx
+    iny
+    bpl  d2b4       ; loop linbuf
+d2b7:
+    ldy  ques
+d2b1:
+    lda  linbuf,y   ; is end of line ?
+    beq  d2bex      ; exit
+;    jsr  outch      ; debug
+    iny
+;    pha
+    cmp  #stmntdlm   ; new statement starts
+    bne  d2b10
+;    lda  dolr+1     ; in operator position (even)
+;    and  #1
+;    bne  d2b10
+    lda  #0
+    sta  dolr+1     ; clear position pointer
+;    pla
+    beq  d2blp      ; loop next
+d2b10:
+;    pla    
+;    cmp  #'('        ; neither var nor op
+;    beq  d2b11
+;    cmp  #')'        ; neither var nor op
+;    bne  d2b12
+;d2b11:
+;    inc  dolr+1     ; stays odd (var) or even (op)
+;d2blp1
+;    jmp  d2blp
+d2b12:
+    cmp  #'"'       ; potential string ?
+    bne  d2blp
+    lda  dolr+1     ; exit on 3rd position (is string)
+    cmp  #3
+    bne  d2blp      ; loop if not
+d2bex:            
+;    jsr  outnl      ;debug
+    pla             ; restore pointer to arg
+    tax
+    ldy  #0
+    rts
 ;-----------------------------------------------------;
 ; Fetch a byte at @[y], ignoring space characters
 ; 10 bytes
@@ -1312,7 +1550,8 @@ findrts:
 ;outrts:
 ;    rts
 ;-----------------------------------------------------;
-;========== 2m5 SBC emulator I/O subroutines ============;
+;======== 2m5 SBC emulator I/O subroutines ===========;
+timr_adr = timr_var*2|$80
 ;-----------------------------------------------------;
 ; Check for user keypress and return if none
 ;   is pending.  Otherwise, check for ctrl-C and
@@ -1321,13 +1560,15 @@ findrts:
 inkey:
     lda  acia_rx    ; Is there a character waiting?
     beq  inkeyr     ;   no: return
-    cmp  #3         ; is ctrl-c
-    beq  istart     ;   yes: abort to OK prompt
+;    cmp  #3         ; is ctrl-c
+;    beq  istart     ;   yes: abort to OK prompt
+    jsr  test_abort
 inkeyp:
     lda  acia_rx    ; pause until next key
     beq  inkeyp
-    cmp  #3         ; is ctrl-c
-    beq  istart     ;   yes: abort to OK prompt
+    jsr  test_abort
+;    cmp  #3         ; is ctrl-c
+;    beq  istart     ;   yes: abort to OK prompt
 inkeyr:
     rts
 ; - - - - - - - - - - - - - - - - - - - - - - - - - - ;
@@ -1344,33 +1585,42 @@ inch:
 conv_bs2del:
     cmp  #27        ; escape?
     bne  skip_esc_no
-    ldy  #5         ; timer loop - 5*10ms
-skip_esc_next:
-    lda  #1         ; ack last tick
-    sta  timr_fl
+    lda  timr_adr   ; wait 5*10ms
+    clc
+    adc  #5
 skip_esc_wait:  
-    lda  timr_fl
-    and  #1         ; next tick
-    beq  skip_esc_wait
-    dey
-    bne  skip_esc_next
+    cmp  timr_adr   ; wait loop
+    bne  skip_esc_wait
+    ldy  #0
 skip_esc_discard:  
     iny             ; any data = y > 1
     lda  acia_rx
     bne  skip_esc_discard
     cpy  #1
-    bne  inch
-skip_esc_esc:       ; escape only - send to vtl  
-    lda  #27
+    bne  inch       ; discard escape sequence
+    lda  #27        ; escape only - send to vtl  
     rts
 skip_esc_no
     ldy  dolr       ; restore y reg
 inch2:
     and  #$7f       ; ensure char is positive ascii
-    cmp  #$03       ; ctrl-C?
-    bne  outch      ;   no: echo to terminal
+;    cmp  #$03       ; ctrl-C?
+    jsr  test_abort
+    jmp  outch      ;   no: echo to terminal
 istart:
     jmp  start      ;   yes: abort to "OK" prompt
+
+test_abort:
+    cmp  #3         ; is ctrl-c
+    beq  istart     ;   yes: abort to OK prompt
+    cmp  #$1a       ; is ctrl-z
+    beq  abort      ;   yes: exit to monitor
+    rts
+abort:
+    lda  #$80       ; exit to monitor
+    sta  diag
+    lda  #ESC       ; escape after continue
+    rts
 ; - - - - - - - - - - - - - - - - - - - - - - - - - - ;
 ; Print ascii char in a to stdout, (cs)
 ;
@@ -1379,6 +1629,7 @@ outch:
     bne  skip_cr
     lda  #10
     sta  acia_tx
+outcr:
     lda  #13
 skip_cr:
     cmp  #8         ; backspace?
@@ -1394,7 +1645,6 @@ skip_bs:
 ; - - - - - - - - - - - - - - - - - - - - - - - - - - ;
 ; Update a variable with the 10ms timer
 ;
-timr_adr = timr_var*2|$80
 IRQ_10ms:
     pha
     inc  timr_adr        ; increment the variable {/}
