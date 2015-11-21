@@ -167,7 +167,7 @@
 ;     programming principles remained at low priority.
 ;
 ; VTL02 for the 2m5 emulated 6502 SBC
-; - released: 20-nov-2015
+; - released: 21-nov-2015
 ; - codename: speedy Gonzales
 ; - based on VTL02C, changes by Klaus2m5
 ;
@@ -1213,16 +1213,6 @@ op_plus:
     adc  3,x
     jmp  op_ret
 ;-----------------------------------------------------;
-; expects:  -
-;
-op_else:
-    lda  0,x
-    ora  1,x
-    beq  else_true
-    lda  #0
-    sta  0,x
-    jmp  op_ret
-;-----------------------------------------------------;
 ; var[x] -= var[x+2]
 ; expects:  (cs)
 ;
@@ -1234,7 +1224,17 @@ op_minus:
     sbc  3,x    
     jmp  op_ret
 ;-----------------------------------------------------;
-; expects:  -
+; if var[x] = 0 then var[x] = var[x+2] else var[x] = 0
+;
+op_else:
+    lda  0,x
+    ora  1,x
+    beq  else_true
+    lda  #0
+    sta  0,x
+    jmp  op_ret
+;-----------------------------------------------------;
+; if var[x] > 0 then var[x] = var[x+2]
 ;
 op_then:
     lda  0,x
@@ -1287,21 +1287,26 @@ op_byp1:
     beq  op_or
   endif
     cmp  #'^'       ; bit-wise xor operator?
-    beq  op_xor
-    cmp  #'}'       ; shift right operator?
-    bne  skp_shr
-    jmp  op_shr
-skp_shr:
-    cmp  #'{'       ; shift left operator
-    bne  skp_shl
-    jmp  op_shl
-skp_shl:
+    bne  op_shift
+;-----------------------------------------------------;
+; var[x] ^= var[x+2]
+; expects:  -
+;
+op_xor:
+    lda  0,x
+    eor  2,x    
+    sta  0,x    
+    lda  1,x    
+    eor  3,x    
+    jmp  op_ret
+
 op_byp2:
 ; - - - - - - - - - - - - - - - - - - - - - - - - - - ;
 ; Apply comparison operator in a to var[x] and var[x+2]
 ;   and place result in var[x] (1: true, 0: false)
 ; expects:  (cs)
 ;
+    sec
     eor  #'<'       ; 0: '<'  1: '='  2: '>'
     sta  gthan      ; other values in a are undefined,
     lda  0,x        ; inline minus
@@ -1361,16 +1366,13 @@ op_or:
     ora  3,x    
     jmp  op_ret
 ;-----------------------------------------------------;
-; var[x] ^= var[x+2]
-; expects:  -
-;
-op_xor:
-    lda  0,x
-    eor  2,x    
-    sta  0,x    
-    lda  1,x    
-    eor  3,x    
-    jmp  op_ret
+; continue shift ops
+op_shift:
+    cmp  #'}'       ; shift right operator?
+    beq  op_shr
+    cmp  #'{'       ; shift left operator ?
+    beq  op_shl
+    bne  op_byp2    ; continue with default comparison
 ;-----------------------------------------------------;
 ; 16-bit unsigned division routine
 ;   var[x] /= var[x+2], {%} = remainder, {>} modified
@@ -1403,23 +1405,25 @@ div2:
 sop_ret
     jmp  eval_gb
 ;-----------------------------------------------------;
-; var[x] shifted right by var[x+2] places
+; var[x] shifted right by var[x+2] bits
 ;
-op_shr:
-    dec  2,x
-    bmi  sop_ret
+op_shr1:
     lsr  1,x
     ror  0,x
-    jmp  op_shr
-;-----------------------------------------------------;
-; var[x] shifted left by var[x+2] places
-;
-op_shl:
+op_shr:
     dec  2,x
-    bmi  sop_ret
+    bpl  op_shr1
+    bmi  eval_gb
+;-----------------------------------------------------;
+; var[x] shifted left by var[x+2] bits
+;
+op_shl1:
     asl  0,x
     rol  1,x
-    jmp  op_shl
+op_shl:
+    dec  2,x
+    bpl  op_shl1
+    bmi  eval_gb
 ;-----------------------------------------------------;
 ; If text at @[y] is a decimal constant, translate it
 ;   into var[x] (discarding any overflow) and update y
