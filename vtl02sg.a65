@@ -1845,7 +1845,7 @@ skip_bs:
 load:
     lda  #0         ; setup dma control block
     sta  dma_cmd
-    sta  gthan+1    ; return code upper byte = 0
+    sta  arg+1      ; return code upper byte = 0
     stx  dma_dat    ; program #
     lda  #lo(prgm)  ; from
     sta  dma_dat
@@ -1856,7 +1856,7 @@ load:
     lda  #7         ; load eep command
     sta  dma_cmd
     lda  dma_sta    ; get status
-    sta  gthan
+    sta  arg
     cmp  #$17
     bne  load_fail
     lda  dma_dat    ; get end of program address
@@ -1870,7 +1870,7 @@ load:
 save:
     lda  #0         ; setup dma control block
     sta  dma_cmd
-    sta  gthan+1    ; return code upper byte = 0
+    sta  arg+1      ; return code upper byte = 0
     stx  dma_dat    ; program #
     lda  #lo(prgm)  ; from
     sta  dma_dat
@@ -1883,11 +1883,11 @@ save:
     lda  #6         ; save eep command
     sta  dma_cmd
     lda  dma_sta    ; get status
-    sta  gthan
+    sta  arg
     cmp  #$16
     beq  save_OK
 load_fail:
-    ldx  gthan      ; print error number
+    ldx  #arg       ; print error number
     jsr  prnum      
 save_OK:
     jmp  start
