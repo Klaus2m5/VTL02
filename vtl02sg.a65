@@ -341,8 +341,9 @@ dma_dat  = io_area+$f8  ;dma data register
     sta  star       ; {*} -> top of user RAM
     lda  #hi(himem)
     sta  star+1
+reset:
     lda  #0         ; clear label array & gosub stack
-    ldx  #95
+    ldx  #$5f
 reset1:
     sta  lblary,x
     dex
@@ -452,7 +453,7 @@ jskp2:
     lda  lblary+62  ; label array clear ?
     beq  skp2       ; then skip clearing it
     lda  #0         ; clear label array & gosub stack
-    ldx  #95
+    ldx  #$5f
 clr_ls:
     sta  lblary,x
     dex
@@ -1862,7 +1863,7 @@ load:
     sta  ampr
     lda  dma_dat
     sta  ampr+1
-    jmp  start
+    jmp  reset      ; clear label array and gosub stack
 ; - - - - - - - - - - - - - - - - - - - - - - - - - - ;
 ; Save a program to EEPROM by number in x
 ;
