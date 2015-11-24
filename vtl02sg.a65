@@ -167,7 +167,7 @@
 ;     programming principles remained at low priority.
 ;
 ; VTL02 for the 2m5 emulated 6502 SBC
-; - released: 21-nov-2015
+; - released: 24-nov-2015
 ; - codename: speedy Gonzales
 ; - based on VTL02C, changes by Klaus2m5
 ;
@@ -183,6 +183,13 @@
 ;     branch to same line is now allowed.
 ;     {?="..."} & unmatched {)} (used for comments) can
 ;     not be continued. 
+;
+;   added load and save facility to user call {>}
+;     "=0;>=13  loads program 13 from EEPROM
+;     "=1;>=42  saves current program to EEPROM as 42
+;     return code is saved to {>} and printed on error.
+;     see emulator manual for return codes.
+;     requires emulator version >= 0.83c 
 ;
 ;   line numbers >= 65280 are now reserved for the
 ;     following fast return & goto features.
@@ -309,15 +316,18 @@ lblary   = $0100    ; array with goto labels
 vtlstck  = $0140    ; gosub stack space, 64 bytes
 linbuf   = $0200    ; input line buffer
 prgm     = $0280    ; VTL02C program grows from here
-himem    = $7800    ;   ... up to the top of user RAM
-vtl02c   = $f800    ; interpreter cold entry point
+himem    = $7700    ;   ... up to the top of user RAM
+vtl02c   = $f700    ; interpreter cold entry point
 ;                     (warm entry point is startok)
-io_area  = $bf00    ;configure emulator terminal I/O
+io_area  = $bf00    ;configure emulator I/O
 acia_tx  = io_area+$f0  ;acia tx data register
 acia_rx  = io_area+$f0  ;acia rx data register
 timr_ie  = io_area+$fe  ;timer interrupt enable bit 0
 timr_fl  = io_area+$ff  ;timer flags, bit 0 = 10ms tick
 diag     = io_area+$fc  ;diag reg, bit 7 = exit to mon
+dma_cmd  = io_area+$f7  ;dma command register
+dma_sta  = io_area+$f7  ;dma status register
+dma_dat  = io_area+$f8  ;dma data register
 ;=====================================================;
     org  vtl02c
 ;-----------------------------------------------------;
@@ -839,9 +849,20 @@ goto:
 
 usr:
     tax             ; jump to user ml routine with
+    lda  quote+1    ; load/save vector?
+    bne  usr1
+    lda  quote
+    beq  usr_load
+    cmp  #1
+    beq  usr_save
+usr1:
     lda  arg+3      ;   arg[{1}] in a:x (MSB:LSB)
     jsr  usrq
     jmp  execend
+usr_load:
+    jmp  load
+usr_save:
+    jmp  save
 usrq:
     jmp  (quote)    ; {"} must point to valid 6502 code
 poke:
@@ -1817,6 +1838,58 @@ skip_bs:
     sta  acia_tx    ; emit char via transmit register
     sec             ; (by contract with callers)
     rts
+; - - - - - - - - - - - - - - - - - - - - - - - - - - ;
+; Load a program from EEPROM by number in x
+;
+load:
+    lda  #0         ; setup dma control block
+    sta  dma_cmd
+    sta  gthan+1    ; return code upper byte = 0
+    stx  dma_dat    ; program #
+    lda  #lo(prgm)  ; from
+    sta  dma_dat
+    sta  ampr       ; & new
+    lda  #hi(prgm)
+    sta  dma_dat
+    sta  ampr+1
+    lda  #7         ; load eep command
+    sta  dma_cmd
+    lda  dma_sta    ; get status
+    sta  gthan
+    cmp  #$17
+    bne  load_fail
+    lda  dma_dat    ; get end of program address
+    sta  ampr
+    lda  dma_dat
+    sta  ampr+1
+    jmp  start
+; - - - - - - - - - - - - - - - - - - - - - - - - - - ;
+; Save a program to EEPROM by number in x
+;
+save:
+    lda  #0         ; setup dma control block
+    sta  dma_cmd
+    sta  gthan+1    ; return code upper byte = 0
+    stx  dma_dat    ; program #
+    lda  #lo(prgm)  ; from
+    sta  dma_dat
+    lda  #hi(prgm)
+    sta  dma_dat
+    lda  ampr       ; to
+    sta  dma_dat
+    lda  ampr+1
+    sta  dma_dat
+    lda  #6         ; save eep command
+    sta  dma_cmd
+    lda  dma_sta    ; get status
+    sta  gthan
+    cmp  #$16
+    beq  save_OK
+load_fail:
+    ldx  gthan      ; print error number
+    jsr  prnum      
+save_OK:
+    jmp  start
 ; - - - - - - - - - - - - - - - - - - - - - - - - - - ;
 ; Update a variable with the 10ms timer
 ;
