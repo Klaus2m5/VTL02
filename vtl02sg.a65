@@ -249,6 +249,7 @@
 ;       244 value or variable missing after operator
 ;       245 missing closing parenthesis
 ;       246 out of memory (*-&)
+;       247 overlap in input buffer, split program line
 ;
 ; internal changes:
 ;   added required atomic variable fetch & store.
@@ -1732,7 +1733,14 @@ syndbl:
     sta  prgbuf,x
     inx
     ldy  arg+4      ; repeat variable & operator
-    jmp  syndbl1
+    tya
+    clc             ; test buffer will not overlap
+    adc  #$20
+    sta  arg+4
+    cpx  arg+4
+    bcc  syndbl1
+    lda  #$f7       ; buffers overlap error
+    jmp  verr
 
 synerr3:
     lda  #$f2       ; invalid or missing operator
