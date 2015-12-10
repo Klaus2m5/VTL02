@@ -168,7 +168,7 @@
 ;
 ;-----------------------------------------------------;
 ; VTL02 for the 2m5 emulated 6502 SBC
-; - released: 08-dec-2015
+; - released: 10-dec-2015
 ; - codename: speedy Gonzales
 ; - based on VTL02C, changes by Klaus2m5
 ;
@@ -1689,8 +1689,7 @@ synvlr:
     jsr  syn_evalp  ; evaluate array index
     lda  arg+3      ; test parenthesis matched
     beq  synaray
-    lda  #$f5       ; missing parenthesis
-    jsr  syn_err
+    jsr  syn_errp   ; missing closing parenthesis
     lda  #0         ; clear parenthesis match count
     sta  arg+3
 synaray:
@@ -1720,8 +1719,7 @@ syndbl2:
     lda  arg+3      ; matching parenthesis
     beq  synlp1
     bmi  synend     ; extra closing p. = comment
-    lda  #$f5       ; missing closing parenthesis
-    jsr  syn_err
+    jsr  syn_errp   ; missing closing parenthesis
     lda  #0         ; clear parenthesis match count
     sta  arg+3
     beq  synlp1
@@ -1857,6 +1855,10 @@ syn_err1:
     rts   
 
 syn_evalp:
+    lda  arg+3      ; is 1st opening parenthesis ?
+    bne  syn_evalp1
+    sty  arg+1      ; save pointer
+syn_evalp1:
     inc  arg+3      ; +1 open parenthesis
 syn_eval:
     jsr  syn_val
@@ -1889,6 +1891,17 @@ syn_operok:
 syn_evalx2:
     dec  arg+3      ; -1 open parenthesis
 syn_evalx:
+    rts
+
+syn_errp:
+    lda  arg        ; set open parenthesis error
+    bne  syn_errp1  ; skip if already set
+    lda  #$f5
+    sta  arg
+    dec  arg+1      ; pointer to opening parenthesis
+    lda  arg+1
+    sta  arg+2
+syn_errp1:
     rts
 
 vld_ops:    
